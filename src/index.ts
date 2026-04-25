@@ -13,6 +13,7 @@ interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   RESEND_API_KEY: string;
   LICENSE_KV: KVNamespace;
+  ADMIN_SECRET: string;
 }
 
 interface LicenseRecord {
@@ -65,7 +66,22 @@ const FREE_LIMITS: Record<string, number> = {
 const FROM_EMAIL = 'EdgeIQ <licenses@edgeiqlabs.com>';
 const SUPPORT_EMAIL = 'support@edgeiqlabs.com';
 const COMPANY_NAME = 'EdgeIQ Labs';
-const KV_LICENSE_INDEX = 'license_index'; // Stores all license keys as JSON array
+const KV_LICENSE_INDEX = 'license_index';
+
+/**
+ * Authenticate admin requests — constant-time Bearer token comparison
+ */
+function authenticateAdmin(request: Request, env: Env): boolean {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return false;
+  const token = authHeader.slice(7);
+  if (token.length !== env.ADMIN_SECRET.length) return false;
+  let result = 0;
+  for (let i = 0; i < token.length; i++) {
+    result |= token.charCodeAt(i) ^ env.ADMIN_SECRET.charCodeAt(i);
+  }
+  return result === 0;
+}
 
 /**
  * Generate a unique license key
@@ -280,7 +296,13 @@ export default {
     }
 
     if (request.method === 'GET') {
-      // Return all licenses from KV for admin review
+      // Admin-only: requires Bearer token
+      if (!authenticateAdmin(request, env)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       const indexData = await env.LICENSE_KV.get(KV_LICENSE_INDEX, 'json');
       const keys: string[] = Array.isArray(indexData) ? indexData : [];
       const records: LicenseRecord[] = [];
