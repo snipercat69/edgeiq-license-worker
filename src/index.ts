@@ -1,7 +1,7 @@
 /**
  * EdgeIQ License + Email Worker
  * 
- * Receives Stripe webhook → generates license key → emails customer via Resend
+ * Receives Stripe webhook → generates license key → stores in KV → emails customer
  * 
  * Deploy: npx wrangler deploy
  * Test: stripe listen --forward-to localhost:8787
@@ -12,26 +12,32 @@ import { Resend } from 'resend';
 interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   RESEND_API_KEY: string;
+  LICENSE_KV: KVNamespace;
 }
 
-// Product ID → product name mapping
+interface LicenseRecord {
+  key: string;
+  email: string;
+  product: string;
+  productName: string;
+  issuedAt: string;
+  customerId?: string;
+  sessionId?: string;
+}
+
+// Product ID → product info mapping
 // Update these with your actual Stripe price IDs from your dashboard
 const PRICE_TO_PRODUCT: Record<string, { name: string; slug: string }> = {
   // === SCREENSHOT API ===
   'price_screenshot_pro_monthly': { name: 'screenshot API Pro', slug: 'screenshot_api' },
-  
   // === SUB.ALERTS ===
   'price_sub_alerts_pro': { name: 'sub.alerts Pro', slug: 'sub_alerts' },
-  
   // === LEAK.SCAN ===
   'price_leak_scan_pro': { name: 'leak.scan Pro', slug: 'leak_scan' },
-  
   // === DOMAIN EXPIRY ===
   'price_domain_expiry_pro': { name: 'domain-expiry Pro', slug: 'domain_expiry' },
-  
   // === DATA ENRICHMENT ===
   'price_data_enrichment_pro': { name: 'data-enrichment API Pro', slug: 'data_enrichment' },
-  
   // === BUNDLE ===
   'price_bundle': { name: 'EdgeIQ All-Access Bundle', slug: 'bundle' },
 };
@@ -59,6 +65,7 @@ const FREE_LIMITS: Record<string, number> = {
 const FROM_EMAIL = 'EdgeIQ <licenses@edgeiqlabs.com>';
 const SUPPORT_EMAIL = 'support@edgeiqlabs.com';
 const COMPANY_NAME = 'EdgeIQ Labs';
+const KV_LICENSE_INDEX = 'license_index'; // Stores all license keys as JSON array
 
 /**
  * Generate a unique license key
@@ -78,7 +85,26 @@ function generateLicenseKey(): string {
 }
 
 /**
- * Verify Stripe webhook signature using Web Crypto API
+ * Store license record in KV
+ * - Individual record: licenses:{key}
+ * - Index of all keys: license_index
+ */
+async function storeLicenseRecord(
+  env: Env,
+  record: LicenseRecord
+): Promise<void> {
+  // Store individual license
+  await env.LICENSE_KV.put(`license:${record.key}`, JSON.stringify(record));
+  
+  // Update the index
+  let indexData = await env.LICENSE_KV.get(KV_LICENSE_INDEX, 'json');
+  let index: string[] = Array.isArray(indexData) ? indexData : [];
+  index.push(record.key);
+  await env.LICENSE_KV.put(KV_LICENSE_INDEX, JSON.stringify(index));
+}
+
+/**
+ * Verify Stripe webhook signature
  */
 async function verifyStripeSignature(
   payload: string,
@@ -117,9 +143,8 @@ async function verifyStripeSignature(
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
   
-  // Constant-time comparison
-  if (computedHex.length !== signatureHex.length) return false;
   let result = 0;
+  if (computedHex.length !== signatureHex.length) return false;
   for (let i = 0; i < computedHex.length; i++) {
     result |= computedHex.charCodeAt(i) ^ signatureHex.charCodeAt(i);
   }
@@ -254,6 +279,23 @@ export default {
       });
     }
 
+    if (request.method === 'GET') {
+      // Return all licenses from KV for admin review
+      const indexData = await env.LICENSE_KV.get(KV_LICENSE_INDEX, 'json');
+      const keys: string[] = Array.isArray(indexData) ? indexData : [];
+      const records: LicenseRecord[] = [];
+      for (const key of keys) {
+        const record = await env.LICENSE_KV.get(`license:${key}`, 'json');
+        if (record) records.push(record as LicenseRecord);
+      }
+      return new Response(JSON.stringify({
+        total: records.length,
+        records
+      }, null, 2), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 });
     }
@@ -277,7 +319,7 @@ export default {
         event = JSON.parse(payload);
       } else {
         // Dev mode — skip verification
-        console.warn('⚠️ STRIPE_WEBHOOK_SECRET not set — skipping verification');
+        console.warn('⚠️  STRIPE_WEBHOOK_SECRET not set — skipping verification');
         event = JSON.parse(payload);
       }
 
@@ -286,6 +328,8 @@ export default {
         const session = event.data.object as any;
         const customerEmail = session.customer_details?.email;
         const priceId = session.line_items?.data?.[0]?.price?.id;
+        const customerId = session.customer;
+        const sessionId = session.id;
 
         if (!customerEmail) {
           console.error('No customer email in session:', session.id);
@@ -301,11 +345,24 @@ export default {
         }
 
         const licenseKey = generateLicenseKey();
-        const resend = new Resend(env.RESEND_API_KEY);
-        
-        await sendLicenseEmail(resend, customerEmail, productInfo.name, licenseKey, productInfo.slug);
+        const record: LicenseRecord = {
+          key: licenseKey,
+          email: customerEmail,
+          product: productInfo.slug,
+          productName: productInfo.name,
+          issuedAt: new Date().toISOString(),
+          customerId,
+          sessionId,
+        };
 
-        console.log(`✅ License sent: ${licenseKey} → ${customerEmail} (${productInfo.name})`);
+        // Store in KV
+        await storeLicenseRecord(env, record);
+        console.log(`✅ License stored: ${licenseKey} → ${customerEmail}`);
+
+        // Send license email
+        const resend = new Resend(env.RESEND_API_KEY);
+        await sendLicenseEmail(resend, customerEmail, productInfo.name, licenseKey, productInfo.slug);
+        console.log(`✅ Email sent: ${licenseKey} → ${customerEmail}`);
 
         return new Response(JSON.stringify({
           success: true,

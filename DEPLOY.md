@@ -14,112 +14,121 @@ cd /home/guy/.openclaw/workspace/apps/edgeiq-license-worker
 npm install
 ```
 
-## Step 2: Get Resend API Key
+## Step 2: Create KV Namespace
+
+```bash
+npx wrangler kv:namespace create "LICENSE_KV"
+```
+
+This outputs something like:
+```
+{ binding = "LICENSE_KV", id = "2b56....." }
+```
+
+Copy the `id` value and paste it into `wrangler.toml`:
+```toml
+[[kv_namespaces]]
+binding = "LICENSE_KV"
+id = "2b56...."   # ← paste your KV namespace ID here
+```
+
+## Step 3: Get Resend API Key
 
 1. Go to https://resend.com and create an account
-2. Go to API Keys → Create API Key
-3. Copy the key (starts with `re_`)
-4. Run: `npx wrangler secret put RESEND_API_KEY`
-   - Paste your Resend API key when prompted
+2. API Keys → Create API Key → copy the key (starts with `re_`)
+3. Run: `npx wrangler secret put RESEND_API_KEY` → paste key
 
-## Step 3: Configure Stripe Webhook
+## Step 4: Configure Stripe Webhook
 
 1. Go to https://dashboard.stripe.com/webhooks
-2. Add endpoint: `https://edgeiq-license-worker.<your-subdomain>.workers.dev/stripe-webhook`
-   - Or use a custom route like `https://api.edgeiqlabs.com/stripe-webhook`
-3. Select events: `checkout.session.completed`
+2. Add endpoint: add your Worker URL (you'll get this after first deploy)
+3. Select event: `checkout.session.completed`
 4. Copy the webhook signing secret (starts with `whsec_`)
-5. Run: `npx wrangler secret put STRIPE_WEBHOOK_SECRET`
-   - Paste your Stripe webhook secret when prompted
+5. Run: `npx wrangler secret put STRIPE_WEBHOOK_SECRET` → paste secret
 
-## Step 4: Update Price IDs
+## Step 5: Update Price IDs
 
-Edit `src/index.ts` and replace the price IDs in `getProductSlug()` with your actual Stripe price IDs:
+Edit `src/index.ts` — replace the `PRICE_TO_PRODUCT` entries with your actual Stripe price IDs:
 
 ```javascript
-// Get these from your Stripe Dashboard → Products → Price → ID
-const priceToProduct: Record<string, string> = {
-  'price_xxxxxxxxxxxx': 'screenshot_api',
-  'price_yyyyyyyyyyyy': 'sub_alerts',
+const PRICE_TO_PRODUCT: Record<string, { name: string; slug: string }> = {
+  'price_xxxxxxxxxxxx': { name: 'screenshot API Pro', slug: 'screenshot_api' },
+  'price_yyyyyyyyyyyy': { name: 'sub.alerts Pro', slug: 'sub_alerts' },
   // ... etc
 };
 ```
 
-To find price IDs: Stripe Dashboard → Products → click product → Prices tab → copy Price ID
+Find price IDs: Stripe Dashboard → Products → click product → Prices tab → copy Price ID
 
-## Step 5: Deploy
+## Step 6: Deploy
 
 ```bash
-cd /home/guy/.openclaw/workspace/apps/edgeiq-license-worker
 npx wrangler deploy
 ```
 
-This outputs your Worker URL, e.g.:
-`https://edgeiq-license-worker.<username>.workers.dev`
+Copy the Worker URL it outputs — you'll need this for Stripe.
 
-## Step 6: Configure Stripe Webhook URL
+## Step 7: Configure Stripe Webhook URL
 
-1. Go to https://dashboard.stripe.com/webhooks
-2. Click the endpoint you created
-3. Update the URL to use your deployed Worker URL:
-   `https://edgeiq-license-worker.<username>.workers.dev`
+Back in Stripe Dashboard → Webhooks → your endpoint:
+- URL: `https://edgeiq-license-worker.<your-account>.workers.dev`
 
-## Step 7: Verify the Setup
+## Step 8: Verify the Setup
 
 Test locally with Stripe CLI:
 ```bash
 stripe listen --forward-to localhost:8787
-# Then trigger a test checkout in Stripe dashboard
 ```
 
-Deploy a test event:
+Trigger a test event:
 ```bash
 stripe trigger checkout.session.completed
 ```
-
-Check worker logs:
-```bash
-npx wrangler tail
-```
-
-## Troubleshooting
-
-**Email not sending?**
-- Verify RESEND_API_KEY is set: `npx wrangler secret list`
-- Check Resend dashboard for sent emails
-- Verify the API key has permission to send
-
-**Webhook not hitting worker?**
-- Check Stripe webhook delivery logs in Stripe Dashboard → Webhooks → endpoint → "Sent events"
-- Verify the worker URL is accessible from the internet
-- Check `npx wrangler tail` for incoming requests
-
-**Invalid signature error?**
-- Make sure STRIPE_WEBHOOK_SECRET is set correctly
-- The secret should match exactly from Stripe webhook settings
-
-## Architecture Notes
-
-- **No database needed**: License keys are stored in Stripe payment metadata and emailed to customers
-- **Stateless**: Each webhook invocation is independent
-- **Resend free tier**: 3,000 emails/day first month, then 100/day free
-- **CF Workers free tier**: 100K requests/day
-
-## Updating the Worker
-
-Edit `src/index.ts`, then redeploy:
-```bash
-npx wrangler deploy
-```
-
-## Monitoring
 
 View live logs:
 ```bash
 npx wrangler tail
 ```
 
-View all deployments:
-```bash
-npx wrangler deployments list
+## Viewing All Issued Licenses
+
+The worker stores every license in Cloudflare KV. To view them:
+
+**Via the worker itself** (GET request — add auth in production):
 ```
+GET https://edgeiq-license-worker.<username>.workers.dev/
+```
+Returns: `{ total: N, records: [{key, email, product, issuedAt, ...}, ...] }`
+
+**Via wrangler CLI:**
+```bash
+# List all license keys
+npx wrangler kv:key list --namespace-id YOUR_KV_NAMESPACE_ID
+
+# Read a specific license
+npx wrangler kv:key get "license:EDGEIQ-XXXX-XXXX-XXXX-XXXX" --namespace-id YOUR_KV_NAMESPACE_ID
+```
+
+## Architecture
+
+- **No database needed** — Cloudflare KV stores all license records (free: 1GB storage)
+- **Stateless worker** — each webhook invocation is independent
+- **Resend free tier** — 3,000 emails/day first month, then 100/day free
+- **CF Workers free tier** — 100K requests/day
+
+## Troubleshooting
+
+**Email not sending?**
+- Verify RESEND_API_KEY: `npx wrangler secret list`
+- Check Resend dashboard for sent emails
+
+**Webhook not hitting worker?**
+- Check Stripe webhook delivery logs: Stripe Dashboard → Webhooks → endpoint → "Sent events"
+- Run `npx wrangler tail` for live logs
+
+**KV not storing?**
+- Verify KV namespace ID is correctly set in wrangler.toml
+- Make sure you created the KV namespace first: `npx wrangler kv:namespace create "LICENSE_KV"`
+
+**Invalid signature?**
+- Make sure STRIPE_WEBHOOK_SECRET matches exactly from Stripe webhook settings
