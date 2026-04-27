@@ -1,0 +1,16 @@
+{
+  "name": "edgeiq-license-worker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "npx wrangler deploy",
+    "dev": "npx wrangler dev"
+  },
+  "dependencies": {
+    "resend": "^3.5.0",
+    "wrangler": "^4.85.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0"
+  }
+}
