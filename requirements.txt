@@ -1,0 +1,2 @@
+# Cloudflare Workers use Wrangler — see DEPLOY.md
+# Dependencies managed by wrangler.toml
