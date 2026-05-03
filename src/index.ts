@@ -22,25 +22,31 @@ interface LicenseRecord {
   product: string;
   productName: string;
   issuedAt: string;
+  expiresAt: string | null; // null = lifetime
+  type: 'subscription' | 'lifetime';
   customerId?: string;
   sessionId?: string;
 }
 
 // Product ID → product info mapping
-// Update these with your actual Stripe price IDs from your dashboard
-const PRICE_TO_PRODUCT: Record<string, { name: string; slug: string }> = {
+// Updated with real Stripe price IDs from the EdgeIQ Stripe dashboard
+// Lifetime products have isLifetime: true (no expiry, one-time purchase)
+// Subscription products renew monthly and carry an expiresAt date
+const PRICE_TO_PRODUCT: Record<string, { name: string; slug: string; isLifetime?: boolean }> = {
   // === SCREENSHOT API ===
-  'price_screenshot_pro_monthly': { name: 'screenshot API Pro', slug: 'screenshot_api' },
+  'price_1TPnAXRC1NZ20yDTUYupIrBi': { name: 'screenshot API Pro', slug: 'screenshot_api' },
+  'price_1TSfMqRC1NZ20yDTatUihonN': { name: 'screenshot API Pro', slug: 'screenshot_api', isLifetime: true },
   // === SUB.ALERTS ===
-  'price_sub_alerts_pro': { name: 'sub.alerts Pro', slug: 'sub_alerts' },
+  'price_1TPmt4RC1NZ20yDTMQwS45rv': { name: 'sub.alerts Pro', slug: 'sub_alerts' },
   // === LEAK.SCAN ===
-  'price_leak_scan_pro': { name: 'leak.scan Pro', slug: 'leak_scan' },
+  'price_1TPnAWRC1NZ20yDTuQ53d7vF': { name: 'leak.scan Pro', slug: 'leak_scan' },
   // === DOMAIN EXPIRY ===
-  'price_domain_expiry_pro': { name: 'domain-expiry Pro', slug: 'domain_expiry' },
+  'price_1TPnAWRC1NZ20yDTDeNlWouA': { name: 'domain-expiry Pro', slug: 'domain_expiry' },
   // === DATA ENRICHMENT ===
-  'price_data_enrichment_pro': { name: 'data-enrichment API Pro', slug: 'data_enrichment' },
+  'price_1TPnAYRC1NZ20yDTzYnPigck': { name: 'data-enrichment API Pro', slug: 'data_enrichment' },
+  'price_1TSfMpRC1NZ20yDTfO6DlSaD': { name: 'data-enrichment API Pro', slug: 'data_enrichment', isLifetime: true },
   // === BUNDLE ===
-  'price_bundle': { name: 'EdgeIQ All-Access Bundle', slug: 'bundle' },
+  'price_1TPmXRRC1NZ20yDTwxe2gKYo': { name: 'EdgeIQ All-Access Bundle', slug: 'bundle' },
 };
 
 // Pro tier monthly limits
@@ -175,10 +181,19 @@ async function sendLicenseEmail(
   toEmail: string,
   productName: string,
   licenseKey: string,
-  slug: string
+  slug: string,
+  isLifetime: boolean = false
 ) {
   const proLimit = PRO_LIMITS[slug] || 0;
   const freeLimit = FREE_LIMITS[slug] || 0;
+
+  const expiryTextHtml = isLifetime
+    ? '✅ <strong>Lifetime access</strong> — never expires'
+    : '✅ License valid for 1 month — auto-renews with payment';
+
+  const expiryTextPlain = isLifetime
+    ? '✅ Lifetime access — never expires'
+    : '✅ License valid for 1 month — auto-renews';
 
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
@@ -223,7 +238,7 @@ async function sendLicenseEmail(
     <div class="features">
       <div class="feature">✅ <strong>${proLimit.toLocaleString()}</strong> API calls/month (your plan)</div>
       <div class="feature">✅ <strong>${freeLimit.toLocaleString()}</strong> free API calls/month (always free)</div>
-      <div class="feature">✅ License valid for 1 month — auto-renews with payment</div>
+      <div class="feature">${expiryTextHtml}</div>
       <div class="feature">✅ Email support: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></div>
     </div>
     
@@ -260,7 +275,7 @@ ${licenseKey}
 INCLUDED WITH YOUR PURCHASE:
 • ${proLimit.toLocaleString()} API calls/month (Pro tier)
 • ${freeLimit.toLocaleString()} free API calls/month (always free)
-• License valid for 1 month — auto-renews
+• ${expiryTextPlain}
 • Email support: ${SUPPORT_EMAIL}
 
 ACTIVATE YOUR LICENSE:
@@ -305,10 +320,13 @@ export default {
       }
       const indexData = await env.LICENSE_KV.get(KV_LICENSE_INDEX, 'json');
       const keys: string[] = Array.isArray(indexData) ? indexData : [];
-      const records: LicenseRecord[] = [];
+      const records: (LicenseRecord & { is_lifetime: boolean })[] = [];
       for (const key of keys) {
         const record = await env.LICENSE_KV.get(`license:${key}`, 'json');
-        if (record) records.push(record as LicenseRecord);
+        if (record) {
+          const r = record as LicenseRecord;
+          records.push({ ...r, is_lifetime: r.type === 'lifetime' });
+        }
       }
       return new Response(JSON.stringify({
         total: records.length,
@@ -366,6 +384,8 @@ export default {
           });
         }
 
+        const isLifetime = productInfo.isLifetime ?? false;
+        const expiresAt = isLifetime ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
         const licenseKey = generateLicenseKey();
         const record: LicenseRecord = {
           key: licenseKey,
@@ -373,6 +393,8 @@ export default {
           product: productInfo.slug,
           productName: productInfo.name,
           issuedAt: new Date().toISOString(),
+          expiresAt,
+          type: isLifetime ? 'lifetime' : 'subscription',
           customerId,
           sessionId,
         };
@@ -383,7 +405,7 @@ export default {
 
         // Send license email
         const resend = new Resend(env.RESEND_API_KEY);
-        await sendLicenseEmail(resend, customerEmail, productInfo.name, licenseKey, productInfo.slug);
+        await sendLicenseEmail(resend, customerEmail, productInfo.name, licenseKey, productInfo.slug, isLifetime);
         console.log(`✅ Email sent: ${licenseKey} → ${customerEmail}`);
 
         return new Response(JSON.stringify({
@@ -391,6 +413,7 @@ export default {
           licenseKey,
           email: customerEmail,
           product: productInfo.name,
+          type: isLifetime ? 'lifetime' : 'subscription',
         }), {
           headers: { 'Content-Type': 'application/json' },
         });
