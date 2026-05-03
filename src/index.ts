@@ -47,6 +47,13 @@ const PRICE_TO_PRODUCT: Record<string, { name: string; slug: string; isLifetime?
   'price_1TSfMpRC1NZ20yDTfO6DlSaD': { name: 'data-enrichment API Pro', slug: 'data_enrichment', isLifetime: true },
   // === BUNDLE ===
   'price_1TPmXRRC1NZ20yDTwxe2gKYo': { name: 'EdgeIQ All-Access Bundle', slug: 'bundle' },
+  // === PHISHSIM ===
+  'price_1TRck1RC1NZ20yDTFF6zNcRB': { name: 'PhishSim Starter', slug: 'phishsim_starter' },
+  'price_1TReMPRC1NZ20yDT2JYBfRl9': { name: 'PhishSim Starter', slug: 'phishsim_starter', isLifetime: true },
+  'price_1TRck2RC1NZ20yDT0FdVOd9Y': { name: 'PhishSim Pro', slug: 'phishsim_pro' },
+  'price_1TReMQRC1NZ20yDTbWxf5pOf': { name: 'PhishSim Pro', slug: 'phishsim_pro', isLifetime: true },
+  'price_1TRck4RC1NZ20yDT3IvlxPEJ': { name: 'PhishSim Agency', slug: 'phishsim_agency' },
+  'price_1TReMRRC1NZ20yDT7s31R1nN': { name: 'PhishSim Agency', slug: 'phishsim_agency', isLifetime: true },
 };
 
 // Pro tier monthly limits
@@ -57,6 +64,9 @@ const PRO_LIMITS: Record<string, number> = {
   domain_expiry: 20,
   data_enrichment: 1000,
   bundle: 999999,
+  phishsim_starter: 1,
+  phishsim_pro: 3,
+  phishsim_agency: 999999,
 };
 
 // Free tier limits
@@ -67,6 +77,9 @@ const FREE_LIMITS: Record<string, number> = {
   domain_expiry: 1,
   data_enrichment: 50,
   bundle: 0,
+  phishsim_starter: 0,
+  phishsim_pro: 0,
+  phishsim_agency: 0,
 };
 
 const FROM_EMAIL = 'EdgeIQ <licenses@edgeiqlabs.com>';
